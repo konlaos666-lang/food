@@ -14,7 +14,8 @@ import javax.swing.UIManager;
 public class FoodExpiryApp {
 
     public static void main(String[] args) {
-
+        
+          // สร้างหน้าจอบนเธรดของ Swing
         SwingUtilities.invokeLater(() -> {
 
             try {
@@ -24,7 +25,7 @@ public class FoodExpiryApp {
             } catch (Exception e) {
                 e.printStackTrace();
             }
-
+            // สร้างและแสดงหน้าต่างหลัก
             new MainFrame().setVisible(true);
         });
     }

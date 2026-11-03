@@ -5,6 +5,7 @@
 package com.foodexpiry;
 
 /**
+ * Food = ข้อมูลอาหาร 1 รายการ ใช้ส่งข้อมูลระหว่าง MainFrame กับ FoodDAO
  *
  * @author PC
  */
@@ -12,11 +13,12 @@ import java.time.LocalDate;
 
 public class Food {
 
-    private int id;
-    private String name;
-    private int quantity;
-    private LocalDate expiryDate;
+    private int id;               // รหัสรายการ (ใช้แยกตอนแก้ไข/ลบ)
+    private String name;          // ชื่ออาหาร
+    private int quantity;         // จำนวน
+    private LocalDate expiryDate; // วันหมดอายุ
 
+    // อ่านจากไฟล์
     public Food(int id, String name, int quantity,
                 LocalDate expiryDate) {
         this.id = id;
@@ -25,11 +27,13 @@ public class Food {
         this.expiryDate = expiryDate;
     }
 
+    // เพิ่มของใหม่
     public Food(String name, int quantity,
                 LocalDate expiryDate) {
         this(0, name, quantity, expiryDate);
     }
 
+    // อ่านค่า 
     public int getId() {
         return id;
     }
@@ -46,6 +50,7 @@ public class Food {
         return expiryDate;
     }
 
+    // เปลี่ยนค่า
     public void setId(int id) {
         this.id = id;
     }
@@ -62,4 +67,3 @@ public class Food {
         this.expiryDate = expiryDate;
     }
 }
-

@@ -10,20 +10,19 @@ import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.event.MouseMotionAdapter;
+import java.awt.geom.RoundRectangle2D;
 import java.sql.SQLException;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Consumer;
 
-/**
- * Food Expiry Tracker - หน้าจอหลัก (ธีมใหม่ม่วง-คราม)
- *
- *  - หน้า Dashboard : การ์ดสรุป + ตารางรายการอาหาร (ค้นหา / กรอง / แก้ไข / ลบ)
- *  - หน้า Add Food  : ฟอร์มเพิ่มอาหาร (และใช้เป็นหน้าแก้ไขเมื่อกด Edit จาก Dashboard)
- */
 public class MainFrame extends JFrame {
 
     private final FoodDAO dao = new FoodDAO();
@@ -31,6 +30,7 @@ public class MainFrame extends JFrame {
     // ---------- Theme colors ----------
     private static final Color PRIMARY       = new Color(99, 102, 241);
     private static final Color PRIMARY_DARK  = new Color(67, 56, 202);
+    private static final Color VIOLET        = new Color(139, 92, 246);
     private static final Color SIDEBAR_TOP   = new Color(30, 27, 75);
     private static final Color SIDEBAR_BOT   = new Color(55, 48, 140);
     private static final Color SOFT          = new Color(238, 240, 255);
@@ -40,7 +40,7 @@ public class MainFrame extends JFrame {
     private static final Color MUTED         = new Color(107, 114, 128);
     private static final Color BORDER        = new Color(228, 231, 242);
     private static final Color ROW_ALT       = new Color(249, 250, 254);
-    private static final Color SELECT_BG     = new Color(224, 231, 255);
+    private static final Color SELECT_BG     = new Color(214, 222, 255);
 
     private static final Color OK            = new Color(16, 185, 129);
     private static final Color WARN          = new Color(245, 158, 11);
@@ -63,14 +63,21 @@ public class MainFrame extends JFrame {
     private static final int COL_DAYS = 4;
     private static final int COL_STATUS = 5;
 
-    // ---------- Pages ----------
+    //Pages
     private static final String PAGE_DASHBOARD = "dashboard";
     private static final String PAGE_ADD = "add";
 
     private CardLayout cardLayout;
-    private JPanel pages;
+    private FadePanel pages;
     private RoundedButton dashboardMenu;
     private RoundedButton addMenu;
+    private Timer fadeTimer;
+    private ToastPane toast;
+
+    //  Animation
+    private float phase = 0f;// เวลาของแอนิเมชั่นวนซ้ำ
+    private final List<JComponent> animated = new ArrayList<>();
+    private int hoverRow = -1;
 
     // ---------- Dashboard ----------
     private JTextField searchField;
@@ -85,14 +92,13 @@ public class MainFrame extends JFrame {
     private RoundedButton editButton;
     private RoundedButton deleteButton;
 
-    // ---------- Add / Edit page ----------
+    // Add / Edit page
     private JLabel addPageTitle;
     private JLabel addPageSubtitle;
     private JLabel formTitle;
     private JTextField nameField;
     private JTextField quantityField;
     private JTextField dateField;
-    private JLabel formMessage;
     private RoundedButton saveButton;
     private RoundedButton clearButton;
     private RoundedButton cancelButton;
@@ -109,10 +115,14 @@ public class MainFrame extends JFrame {
         getContentPane().setBackground(BG);
         setLayout(new BorderLayout());
 
+        toast = new ToastPane();
+        setGlassPane(toast);
+        toast.setVisible(true);
+
         add(createSidebar(), BorderLayout.WEST);
 
         cardLayout = new CardLayout();
-        pages = new JPanel(cardLayout);
+        pages = new FadePanel(cardLayout);
         pages.setBackground(BG);
         pages.add(createDashboardPage(), PAGE_DASHBOARD);
         pages.add(createAddPage(), PAGE_ADD);
@@ -122,22 +132,38 @@ public class MainFrame extends JFrame {
         updateButtonStates();
         resetForm();
         showPage(PAGE_DASHBOARD);
+
+        // ตัวขับแอนิเมชันที่วนซ้ำ(แบนเนอร์, ไอคอน, จุดกะพริบ)
+        Timer ticker = new Timer(40, e -> {
+            phase += 0.04f;
+            for (JComponent c : animated) {
+                if (c.isShowing()) {
+                    c.repaint();
+                }
+            }
+        });
+        ticker.start();
     }
 
-    // =====================================================================
     // NAVIGATION
-    // =====================================================================
-
     private void showPage(String name) {
+
         cardLayout.show(pages, name);
         dashboardMenu.setActive(PAGE_DASHBOARD.equals(name));
         addMenu.setActive(PAGE_ADD.equals(name));
+
+        // เปลี่ยนหน้าแบบ Fade-in
+        if (fadeTimer != null) {
+            fadeTimer.stop();
+        }
+        pages.overlay = 1f;
+        fadeTimer = Anim.run(380, p -> {
+            pages.overlay = 1f - p;
+            pages.repaint();
+        });
     }
 
-    // =====================================================================
     // SIDEBAR
-    // =====================================================================
-
     private JPanel createSidebar() {
 
         JPanel sidebar = new GradientPanel(SIDEBAR_TOP, SIDEBAR_BOT);
@@ -187,7 +213,7 @@ public class MainFrame extends JFrame {
         sidebar.add(addMenu);
         sidebar.add(Box.createVerticalGlue());
 
-        JLabel footer = new JLabel("Food Expiry Tracker v2.0");
+        JLabel footer = new JLabel("Food Expiry Tracker v3.0");
         footer.setForeground(new Color(196, 202, 255));
         footer.setFont(font(Font.PLAIN, 12));
         footer.setAlignmentX(LEFT_ALIGNMENT);
@@ -199,40 +225,35 @@ public class MainFrame extends JFrame {
     private RoundedButton createMenuButton(String text) {
 
         RoundedButton b = new RoundedButton(text,
-            new Color(255, 255, 255, 0), new Color(255, 255, 255, 28));
-        b.activeBg = new Color(255, 255, 255, 48);
+            new Color(255, 255, 255, 0), new Color(255, 255, 255, 30));
+        b.activeBg = new Color(255, 255, 255, 52);
         b.indicator = true;
         b.arc = 14;
         b.setFont(font(Font.BOLD, 15));
         b.setHorizontalAlignment(SwingConstants.LEFT);
-        b.setBorder(new EmptyBorder(13, 18, 13, 10));
+        b.setBorder(new EmptyBorder(13, 20, 13, 10));
         b.setMaximumSize(new Dimension(Integer.MAX_VALUE, 48));
         b.setAlignmentX(LEFT_ALIGNMENT);
         return b;
     }
 
-    // =====================================================================
     // DASHBOARD PAGE
-    // =====================================================================
-
     private JPanel createDashboardPage() {
 
         JPanel page = new JPanel(new BorderLayout(0, 20));
         page.setBackground(BG);
-        page.setBorder(new EmptyBorder(28, 34, 26, 34));
+        page.setBorder(new EmptyBorder(26, 34, 22, 34));
 
-        JPanel north = new JPanel(new BorderLayout(0, 20));
+        JPanel north = new JPanel(new BorderLayout(0, 18));
         north.setOpaque(false);
 
-        JLabel date = new JLabel(
+        BannerPanel banner = new BannerPanel("Dashboard",
+            greeting() + "! Here is the overview of your food inventory.",
             LocalDate.now().format(
                 DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy", Locale.ENGLISH)));
-        date.setFont(font(Font.BOLD, 14));
-        date.setForeground(PRIMARY);
+        animated.add(banner);
 
-        north.add(createPageHeader("Dashboard",
-            "Overview of your food inventory and expiry dates", date),
-            BorderLayout.NORTH);
+        north.add(banner, BorderLayout.NORTH);
         north.add(createDashboardCards(), BorderLayout.CENTER);
 
         page.add(north, BorderLayout.NORTH);
@@ -241,45 +262,18 @@ public class MainFrame extends JFrame {
         return page;
     }
 
-    private JPanel createPageHeader(String title, String subtitle, JComponent east) {
-
-        JPanel header = new JPanel(new BorderLayout());
-        header.setOpaque(false);
-
-        JPanel titles = new JPanel();
-        titles.setOpaque(false);
-        titles.setLayout(new BoxLayout(titles, BoxLayout.Y_AXIS));
-
-        JLabel t = new JLabel(title);
-        t.setFont(font(Font.BOLD, 32));
-        t.setForeground(TEXT);
-
-        JLabel s = new JLabel(subtitle);
-        s.setFont(font(Font.PLAIN, 15));
-        s.setForeground(MUTED);
-
-        titles.add(t);
-        titles.add(Box.createVerticalStrut(3));
-        titles.add(s);
-
-        header.add(titles, BorderLayout.WEST);
-        if (east != null) {
-            header.add(east, BorderLayout.EAST);
-        }
-
-        // เก็บ label ไว้ใช้เปลี่ยนข้อความหน้า Add/Edit
-        if (title.equals("Add Food")) {
-            addPageTitle = t;
-            addPageSubtitle = s;
-        }
-        return header;
+    private String greeting() {
+        int h = LocalTime.now().getHour();
+        if (h < 12) return "Good morning";
+        if (h < 17) return "Good afternoon";
+        return "Good evening";
     }
 
     private JPanel createDashboardCards() {
 
         JPanel cards = new JPanel(new GridLayout(1, 3, 18, 0));
         cards.setOpaque(false);
-        cards.setPreferredSize(new Dimension(700, 118));
+        cards.setPreferredSize(new Dimension(700, 128));
 
         totalValue = new JLabel("0");
         soonValue = new JLabel("0");
@@ -292,7 +286,7 @@ public class MainFrame extends JFrame {
             "Today or within 3 days", WARN, "!", 2));
 
         cards.add(createCard("EXPIRED", expiredValue,
-            "Past expiry date", BAD, "×", 3));
+            "Past expiry date", BAD, "x", 3));
 
         return cards;
     }
@@ -300,9 +294,10 @@ public class MainFrame extends JFrame {
     private JPanel createCard(String title, JLabel value, String description,
                               Color accent, String glyph, int filterIndex) {
 
-        RoundedPanel card = new RoundedPanel(Color.WHITE, 18);
+        RoundedPanel card = new RoundedPanel(Color.WHITE, 20);
+        card.accent = accent;
         card.setLayout(new BorderLayout(10, 0));
-        card.setBorder(new EmptyBorder(16, 22, 16, 20));
+        card.setBorder(new EmptyBorder(14, 22, 20, 14));
         card.setCursor(new Cursor(Cursor.HAND_CURSOR));
         card.setToolTipText("Click to filter the table");
 
@@ -327,12 +322,16 @@ public class MainFrame extends JFrame {
         text.add(Box.createVerticalStrut(2));
         text.add(desc);
 
+        IconBadge badge = new IconBadge(accent, glyph);
+        animated.add(badge);
+
         card.add(text, BorderLayout.CENTER);
-        card.add(new IconBadge(accent, glyph), BorderLayout.EAST);
+        card.add(badge, BorderLayout.EAST);
 
         card.addMouseListener(new MouseAdapter() {
-            @Override
-            public void mouseClicked(MouseEvent e) {
+            @Override public void mouseEntered(MouseEvent e) { card.setHover(true); }
+            @Override public void mouseExited(MouseEvent e) { card.setHover(false); }
+            @Override public void mouseClicked(MouseEvent e) {
                 statusFilter.setSelectedIndex(filterIndex);
             }
         });
@@ -341,12 +340,11 @@ public class MainFrame extends JFrame {
     }
 
     // ---------- table ----------
-
     private JPanel createTablePanel() {
 
-        RoundedPanel panel = new RoundedPanel(Color.WHITE, 18);
+        RoundedPanel panel = new RoundedPanel(Color.WHITE, 20);
         panel.setLayout(new BorderLayout(0, 14));
-        panel.setBorder(new EmptyBorder(20, 24, 16, 24));
+        panel.setBorder(new EmptyBorder(20, 24, 22, 24));
 
         // top bar
         JPanel top = new JPanel(new BorderLayout(12, 0));
@@ -403,7 +401,27 @@ public class MainFrame extends JFrame {
             }
         };
 
-        table = new JTable(model);
+        table = new JTable(model) {
+            // ข้อความเมื่อตารางว่าง
+            @Override
+            protected void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                if (getRowCount() == 0) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
+                        RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                    g2.setColor(new Color(150, 156, 178));
+                    g2.setFont(font(Font.PLAIN, 15));
+                    String msg = model.getRowCount() == 0
+                        ? "No food items yet. Add one from the \"Add Food\" page."
+                        : "No items match your search or filter.";
+                    FontMetrics fm = g2.getFontMetrics();
+                    g2.drawString(msg, (getWidth() - fm.stringWidth(msg)) / 2,
+                        Math.max(60, getVisibleRect().height / 3));
+                    g2.dispose();
+                }
+            }
+        };
         table.setFont(font(Font.PLAIN, 15));
         table.setRowHeight(46);
         table.setSelectionBackground(SELECT_BG);
@@ -414,6 +432,7 @@ public class MainFrame extends JFrame {
         table.setIntercellSpacing(new Dimension(0, 1));
         table.setFillsViewportHeight(true);
         table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        animated.add(table);   // ให้จุดกะพริบในป้ายสถานะขยับ
 
         JTableHeader header = table.getTableHeader();
         header.setFont(font(Font.BOLD, 14));
@@ -432,7 +451,7 @@ public class MainFrame extends JFrame {
         table.setDefaultRenderer(String.class, cell);
         table.setDefaultRenderer(LocalDate.class, cell);
 
-        // ซ่อนคอลัมน์ ID (ยังอยู่ใน model)
+        // ซ่อนคอลัมน์ ID
         table.removeColumn(table.getColumnModel().getColumn(COL_ID));
 
         table.getColumn("Status").setCellRenderer(new StatusRenderer());
@@ -440,7 +459,7 @@ public class MainFrame extends JFrame {
         table.getColumn("Quantity").setPreferredWidth(90);
         table.getColumn("Expiry Date").setPreferredWidth(140);
         table.getColumn("Days Left").setPreferredWidth(100);
-        table.getColumn("Status").setPreferredWidth(160);
+        table.getColumn("Status").setPreferredWidth(170);
 
         JScrollPane scroll = new JScrollPane(table);
         scroll.setBorder(BorderFactory.createLineBorder(BORDER));
@@ -448,7 +467,7 @@ public class MainFrame extends JFrame {
         scroll.getVerticalScrollBar().setUnitIncrement(18);
         panel.add(scroll, BorderLayout.CENTER);
 
-        // bottom bar: message + Edit / Delete
+        // bottom bar: count + Edit / Delete
         JPanel bottom = new JPanel(new BorderLayout(10, 0));
         bottom.setOpaque(false);
 
@@ -490,12 +509,30 @@ public class MainFrame extends JFrame {
                     startEdit();
                 }
             }
+
+            @Override
+            public void mouseExited(MouseEvent e) {
+                hoverRow = -1;
+                table.repaint();
+            }
+        });
+
+        // ไฮไลต์แถวตรงเมาส์ชี้
+        table.addMouseMotionListener(new MouseMotionAdapter() {
+            @Override
+            public void mouseMoved(MouseEvent e) {
+                int r = table.rowAtPoint(e.getPoint());
+                if (r != hoverRow) {
+                    hoverRow = r;
+                    table.repaint();
+                }
+            }
         });
 
         return panel;
     }
 
-    /** กรองตามคำค้นหา + สถานะ พร้อมกัน */
+    //กรองตามคำค้นหา + สถานะ พร้อมกัน 
     private void applyFilter() {
 
         final String keyword = searchField.getText().trim().toLowerCase();
@@ -524,24 +561,24 @@ public class MainFrame extends JFrame {
         updateMessage();
     }
 
-    // =====================================================================
     // ADD / EDIT PAGE
-    // =====================================================================
-
     private JPanel createAddPage() {
 
         JPanel page = new JPanel(new BorderLayout(0, 22));
         page.setBackground(BG);
-        page.setBorder(new EmptyBorder(28, 34, 26, 34));
+        page.setBorder(new EmptyBorder(26, 34, 22, 34));
 
-        page.add(createPageHeader("Add Food",
-            "Register a new food item and its expiry date", null),
-            BorderLayout.NORTH);
+        BannerPanel banner = new BannerPanel("Add Food",
+            "Register a new food item and its expiry date", "");
+        animated.add(banner);
+        addPageTitle = banner.titleLabel;
+        addPageSubtitle = banner.subtitleLabel;
+        page.add(banner, BorderLayout.NORTH);
 
-        // ----- form card -----
-        RoundedPanel card = new RoundedPanel(Color.WHITE, 18);
+        // form card
+        RoundedPanel card = new RoundedPanel(Color.WHITE, 20);
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
-        card.setBorder(new EmptyBorder(26, 30, 26, 30));
+        card.setBorder(new EmptyBorder(26, 30, 32, 30));
 
         formTitle = new JLabel("Food Information");
         formTitle.setFont(font(Font.BOLD, 20));
@@ -559,7 +596,7 @@ public class MainFrame extends JFrame {
         card.add(wrapField("Quantity", quantityField, null));
         card.add(Box.createVerticalStrut(16));
         card.add(wrapField("Expiry Date", dateField, createQuickDatePanel()));
-        card.add(Box.createVerticalStrut(24));
+        card.add(Box.createVerticalStrut(26));
 
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         actions.setOpaque(false);
@@ -583,14 +620,6 @@ public class MainFrame extends JFrame {
         actions.add(clearButton);
         actions.add(cancelButton);
         card.add(actions);
-
-        card.add(Box.createVerticalStrut(14));
-
-        formMessage = new JLabel(" ");
-        formMessage.setFont(font(Font.PLAIN, 13));
-        formMessage.setForeground(MUTED);
-        formMessage.setAlignmentX(LEFT_ALIGNMENT);
-        card.add(formMessage);
 
         // Enter = บันทึก
         java.awt.event.ActionListener enter = e -> saveFood();
@@ -695,10 +724,7 @@ public class MainFrame extends JFrame {
             new EmptyBorder(5, 12, 5, 12));
     }
 
-    // =====================================================================
     // RENDERERS
-    // =====================================================================
-
     private class HeaderRenderer extends DefaultTableCellRenderer {
 
         @Override
@@ -722,6 +748,13 @@ public class MainFrame extends JFrame {
         }
     }
 
+    private Color rowColor(int row) {
+        if (row == hoverRow) {
+            return SOFT;
+        }
+        return row % 2 == 0 ? Color.WHITE : ROW_ALT;
+    }
+
     private class CellRenderer extends DefaultTableCellRenderer {
 
         @Override
@@ -737,7 +770,7 @@ public class MainFrame extends JFrame {
             setHorizontalAlignment(number ? SwingConstants.CENTER : SwingConstants.LEFT);
 
             if (!selected) {
-                setBackground(row % 2 == 0 ? Color.WHITE : ROW_ALT);
+                setBackground(rowColor(row));
                 setForeground(TEXT);
 
                 if (t.getColumnName(column).equals("Days Left")
@@ -755,10 +788,12 @@ public class MainFrame extends JFrame {
         }
     }
 
-    /** ป้ายสถานะแบบ Badge (มุมมน) */
+    // ป้ายสถานะแบบ Badge มีจุดกะพริบ (เฉพาะ Expired / ใกล้หมดอายุ) 
     private class StatusRenderer extends DefaultTableCellRenderer {
 
         private Color badgeBg = null;
+        private Color dotColor = null;
+        private boolean pulse = false;
         private Color rowBg = Color.WHITE;
 
         @Override
@@ -770,10 +805,9 @@ public class MainFrame extends JFrame {
             setOpaque(false);
             setHorizontalAlignment(SwingConstants.CENTER);
             setFont(font(Font.BOLD, 12));
-            setBorder(new EmptyBorder(0, 0, 0, 0));
+            setBorder(new EmptyBorder(0, 14, 0, 0));
 
-            rowBg = selected ? t.getSelectionBackground()
-                             : (row % 2 == 0 ? Color.WHITE : ROW_ALT);
+            rowBg = selected ? t.getSelectionBackground() : rowColor(row);
 
             String status = value == null ? "" : value.toString();
 
@@ -781,19 +815,27 @@ public class MainFrame extends JFrame {
                 case S_NORMAL:
                     setForeground(new Color(4, 120, 87));
                     badgeBg = new Color(209, 250, 229);
+                    dotColor = OK;
+                    pulse = false;
                     break;
                 case S_SOON:
                 case S_TODAY:
                     setForeground(new Color(180, 83, 9));
                     badgeBg = new Color(254, 243, 199);
+                    dotColor = WARN;
+                    pulse = true;
                     break;
                 case S_EXPIRED:
                     setForeground(new Color(190, 18, 60));
                     badgeBg = new Color(255, 228, 230);
+                    dotColor = BAD;
+                    pulse = true;
                     break;
                 default:
                     setForeground(TEXT);
                     badgeBg = null;
+                    dotColor = null;
+                    pulse = false;
             }
             return this;
         }
@@ -812,6 +854,18 @@ public class MainFrame extends JFrame {
                 int h = getHeight() - 16;
                 g2.setColor(badgeBg);
                 g2.fillRoundRect(12, 8, getWidth() - 24, h, h, h);
+
+                // จุดสถานะ + วงกะพริบ
+                int cx = 30;
+                int cy = getHeight() / 2;
+                if (pulse) {
+                    float k = (float) (0.5 + 0.5 * Math.sin(phase * 3.2));
+                    int r = (int) (4 + 4 * k);
+                    g2.setColor(withAlpha(dotColor, (int) (90 * (1 - k))));
+                    g2.fillOval(cx - r, cy - r, r * 2, r * 2);
+                }
+                g2.setColor(dotColor);
+                g2.fillOval(cx - 3, cy - 3, 7, 7);
             }
             g2.dispose();
 
@@ -819,11 +873,8 @@ public class MainFrame extends JFrame {
         }
     }
 
-    // =====================================================================
     // ACTIONS
-    // =====================================================================
-
-    /** บันทึก: เพิ่มใหม่ หรือแก้ไข ขึ้นอยู่กับโหมด */
+    // บันทึก: เพิ่มใหม่ หรือแก้ไข ขึ้นอยู่กับโหมด
     private void saveFood() {
 
         try {
@@ -834,8 +885,7 @@ public class MainFrame extends JFrame {
                 dao.addFood(input);
                 refreshTable();
                 resetForm();
-                showMessage(formMessage,
-                    "✔ Added \"" + input.getName() + "\" successfully", true);
+                toast("Added \"" + input.getName() + "\" successfully", true);
                 nameField.requestFocusInWindow();
 
             } else {
@@ -847,8 +897,7 @@ public class MainFrame extends JFrame {
                 refreshTable();
                 resetForm();
                 showPage(PAGE_DASHBOARD);
-                showMessage(messageLabel,
-                    "✔ Updated \"" + food.getName() + "\" successfully", true);
+                toast("Updated \"" + food.getName() + "\" successfully", true);
             }
 
         } catch (Exception ex) {
@@ -856,13 +905,13 @@ public class MainFrame extends JFrame {
         }
     }
 
-    /** ไปหน้า Add Food ในโหมดแก้ไข โดยโหลดข้อมูลจากแถวที่เลือก */
+    // ไปหน้า Add Food ในโหมดแก้ไข โดยโหลดข้อมูลจากแถวที่เลือก
     private void startEdit() {
 
         int viewRow = table.getSelectedRow();
 
         if (viewRow == -1) {
-            showMessage(messageLabel, "Please select a food item first.", false);
+            toast("Please select a food item first.", false);
             return;
         }
 
@@ -884,7 +933,7 @@ public class MainFrame extends JFrame {
         int viewRow = table.getSelectedRow();
 
         if (viewRow == -1) {
-            showMessage(messageLabel, "Please select a food item first.", false);
+            toast("Please select a food item first.", false);
             return;
         }
 
@@ -907,7 +956,7 @@ public class MainFrame extends JFrame {
 
             dao.deleteFood(id);
             refreshTable();
-            showMessage(messageLabel, "✔ Deleted \"" + name + "\"", true);
+            toast("Deleted \"" + name + "\"", true);
 
         } catch (Exception ex) {
             showError("Cannot delete food", ex);
@@ -942,17 +991,14 @@ public class MainFrame extends JFrame {
             date = LocalDate.parse(dateText);
         } catch (DateTimeParseException e) {
             throw new IllegalArgumentException(
-                "Please enter the date as YYYY-MM-DD\n(e.g. "
+                "Please enter the date as YYYY-MM-DD (e.g. "
                 + LocalDate.now().plusDays(7) + ").");
         }
 
         return new Food(name, quantity, date);
     }
 
-    // =====================================================================
     // REFRESH / FORM STATE
-    // =====================================================================
-
     private void refreshTable() {
 
         try {
@@ -996,19 +1042,41 @@ public class MainFrame extends JFrame {
                 });
             }
 
-            totalValue.setText(String.valueOf(total));
-            soonValue.setText(String.valueOf(soon));
-            expiredValue.setText(String.valueOf(expired));
+            animateCount(totalValue, total);
+            animateCount(soonValue, soon);
+            animateCount(expiredValue, expired);
 
             updateMessage();
 
         } catch (SQLException ex) {
-            showMessage(messageLabel, "Database connection failed", false);
             showError("Cannot load food data", ex);
         }
     }
 
-    /** ล้างฟอร์มและกลับเป็นโหมดเพิ่ม */
+    // ตัวเลขนับขึ้น/ลงไปยังค่าใหม่แบบนุ่มนวล
+    private void animateCount(JLabel label, int target) {
+
+        Object cur = label.getClientProperty("val");
+        final int from = cur instanceof Integer ? (Integer) cur : 0;
+
+        Object old = label.getClientProperty("timer");
+        if (old instanceof Timer) {
+            ((Timer) old).stop();
+        }
+
+        label.putClientProperty("val", target);
+
+        if (from == target) {
+            label.setText(String.valueOf(target));
+            return;
+        }
+
+        Timer t = Anim.run(750, p ->
+            label.setText(String.valueOf(Math.round(from + (target - from) * p))));
+        label.putClientProperty("timer", t);
+    }
+
+    // ล้างฟอร์มและกลับเป็นโหมดเพิ่ม
     private void resetForm() {
 
         editingId = null;
@@ -1016,7 +1084,6 @@ public class MainFrame extends JFrame {
         nameField.setText("");
         quantityField.setText("");
         dateField.setText("");
-        formMessage.setText(" ");
 
         if (table != null) {
             table.clearSelection();
@@ -1024,7 +1091,7 @@ public class MainFrame extends JFrame {
         applyFormMode();
     }
 
-    /** ปรับหัวข้อ/ปุ่มของหน้า Add ตามโหมด Add หรือ Edit */
+    //ปรับหัวข้อ/ปุ่มของหน้า Add ตามโหมด Add หรือ Edit 
     private void applyFormMode() {
 
         boolean editing = editingId != null;
@@ -1048,53 +1115,105 @@ public class MainFrame extends JFrame {
         deleteButton.setEnabled(selected);
     }
 
-    // =====================================================================
-    // MESSAGES
-    // =====================================================================
 
+    // MESSAGES
     private void updateMessage() {
 
         int shown = table.getRowCount();
         int all = model.getRowCount();
 
-        showMessage(messageLabel, shown == all
+        messageLabel.setText(shown == all
             ? "Showing " + all + " food items"
-            : "Showing " + shown + " of " + all + " food items", null);
+            : "Showing " + shown + " of " + all + " food items");
     }
 
-    /** success: true = เขียว, false = แดง, null = เทา (ข้อมูลทั่วไป) */
-    private void showMessage(JLabel label, String text, Boolean success) {
-
-        label.setText(text);
-
-        if (success == null) {
-            label.setForeground(MUTED);
-        } else {
-            label.setForeground(success ? new Color(4, 120, 87) : new Color(190, 18, 60));
-        }
+    private void toast(String text, boolean success) {
+        toast.show(text, success, success ? 2200 : 3800);
     }
 
     private void showError(String title, Exception ex) {
 
         String msg = ex.getMessage() == null ? ex.toString() : ex.getMessage();
-
-        JLabel target = pages.isShowing() && formMessage.isShowing()
-            ? formMessage : messageLabel;
-        showMessage(target, "✖ " + title + ": " + msg.replace('\n', ' '), false);
-
-        JOptionPane.showMessageDialog(
-            this, msg, title, JOptionPane.ERROR_MESSAGE);
+        toast(title + ": " + msg.replace('\n', ' '), false);
     }
 
-    // =====================================================================
-    // HELPERS & CUSTOM COMPONENTS
-    // =====================================================================
+    // ตัวช่วยทำ Animation ด้วย Swing Timer
+    private static class Anim {
+
+        static float ease(float p) {
+            float q = 1f - p;
+            return 1f - q * q * q;
+        }
+
+        //step รับค่าความคืบหน้า 0..1
+        static Timer run(int durationMs, Consumer<Float> step) {
+
+            final long start = System.nanoTime();
+            Timer t = new Timer(15, null);
+            t.setInitialDelay(0);
+
+            t.addActionListener(e -> {
+                float raw = Math.min(1f, (System.nanoTime() - start) / (durationMs * 1_000_000f));
+                step.accept(ease(raw));
+                if (raw >= 1f) {
+                    ((Timer) e.getSource()).stop();
+                }
+            });
+
+            t.start();
+            return t;
+        }
+    }
+
+    private static Color lerp(Color a, Color b, float t) {
+        return new Color(
+            clamp(a.getRed() + (b.getRed() - a.getRed()) * t),
+            clamp(a.getGreen() + (b.getGreen() - a.getGreen()) * t),
+            clamp(a.getBlue() + (b.getBlue() - a.getBlue()) * t),
+            clamp(a.getAlpha() + (b.getAlpha() - a.getAlpha()) * t));
+    }
+
+    private static int clamp(float v) {
+        return Math.max(0, Math.min(255, Math.round(v)));
+    }
+
+    private static Color withAlpha(Color c, int alpha) {
+        return new Color(c.getRed(), c.getGreen(), c.getBlue(),
+            Math.max(0, Math.min(255, alpha)));
+    }
 
     private static Font font(int style, int size) {
         return new Font(FONT, style, size);
     }
 
-    /** พื้นหลังไล่สี (ใช้กับ Sidebar) */
+
+    // แผงที่เปลี่ยนหน้าแล้วมีเลเยอร์สีพื้นจางออก (Fade-in)
+    private static class FadePanel extends JPanel {
+
+        float overlay = 0f;
+
+        FadePanel(LayoutManager lm) {
+            super(lm);
+        }
+
+        @Override
+        protected void paintChildren(Graphics g) {
+            super.paintChildren(g);
+            if (overlay > 0.01f) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setColor(withAlpha(BG, (int) (overlay * 255)));
+                g2.fillRect(0, 0, getWidth(), getHeight());
+                g2.dispose();
+            }
+        }
+
+        @Override
+        public boolean isOptimizedDrawingEnabled() {
+            return false;
+        }
+    }
+
+    //พื้นหลังไล่สี (ใช้กับ Sidebar) 
     private static class GradientPanel extends JPanel {
 
         private final Color top;
@@ -1114,11 +1233,95 @@ public class MainFrame extends JFrame {
         }
     }
 
-    /** แผงมุมมนพร้อมเส้นขอบบาง */
+    // แบนเนอร์หัวหน้า ไล่สี + วงกลมลอยเคลื่อนไหว 
+    private class BannerPanel extends JPanel {
+
+        final JLabel titleLabel;
+        final JLabel subtitleLabel;
+
+        // x, y (สัดส่วน), รัศมี, ความเร็ว, เฟส
+        private final float[][] bubbles = {
+            {0.80f, 0.25f, 74f, 0.9f, 0.0f},
+            {0.93f, 0.85f, 46f, 1.3f, 1.7f},
+            {0.58f, 0.95f, 96f, 0.6f, 3.1f},
+            {0.30f, 0.05f, 38f, 1.1f, 4.2f},
+            {0.45f, 0.60f, 26f, 1.6f, 5.0f}
+        };
+
+        BannerPanel(String title, String subtitle, String right) {
+
+            setLayout(new BorderLayout());
+            setOpaque(false);
+            setBorder(new EmptyBorder(24, 32, 30, 32));
+            setPreferredSize(new Dimension(700, 124));
+
+            JPanel titles = new JPanel();
+            titles.setOpaque(false);
+            titles.setLayout(new BoxLayout(titles, BoxLayout.Y_AXIS));
+
+            titleLabel = new JLabel(title);
+            titleLabel.setFont(font(Font.BOLD, 32));
+            titleLabel.setForeground(Color.WHITE);
+
+            subtitleLabel = new JLabel(subtitle);
+            subtitleLabel.setFont(font(Font.PLAIN, 15));
+            subtitleLabel.setForeground(new Color(226, 230, 255));
+
+            titles.add(titleLabel);
+            titles.add(Box.createVerticalStrut(4));
+            titles.add(subtitleLabel);
+
+            add(titles, BorderLayout.WEST);
+
+            if (right != null && !right.isEmpty()) {
+                JLabel r = new JLabel(right);
+                r.setFont(font(Font.BOLD, 14));
+                r.setForeground(Color.WHITE);
+                add(r, BorderLayout.EAST);
+            }
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                RenderingHints.VALUE_ANTIALIAS_ON);
+
+            int w = getWidth();
+            int h = getHeight() - 6;
+
+            Shape shape = new RoundRectangle2D.Float(0, 0, w - 1, h, 24, 24);
+            g2.setClip(shape);
+
+            g2.setPaint(new GradientPaint(0, 0, PRIMARY_DARK, w, h, VIOLET));
+            g2.fill(shape);
+
+            for (float[] b : bubbles) {
+                double t = phase * b[3] + b[4];
+                float cx = (float) ((b[0] + 0.03 * Math.sin(t)) * w);
+                float cy = (float) ((b[1] + 0.10 * Math.cos(t * 0.8)) * h);
+                float r = b[2];
+                g2.setColor(new Color(255, 255, 255, 24));
+                g2.fillOval((int) (cx - r), (int) (cy - r), (int) (r * 2), (int) (r * 2));
+            }
+
+            g2.dispose();
+        }
+    }
+
+    // แผงมุมมนมีเงา และเปลี่ยนเงา
     private static class RoundedPanel extends JPanel {
+
+        private static final int SHADOW = 6;
 
         private final Color fill;
         private final int arc;
+        private float hover = 0f;
+        private float target = 0f;
+        private Timer timer;
+
+        Color accent = PRIMARY;
 
         RoundedPanel(Color fill, int arc) {
             this.fill = fill;
@@ -1126,22 +1329,51 @@ public class MainFrame extends JFrame {
             setOpaque(false);
         }
 
+        void setHover(boolean on) {
+            target = on ? 1f : 0f;
+            if (timer == null) {
+                timer = new Timer(16, e -> {
+                    hover += (target - hover) * 0.22f;
+                    if (Math.abs(target - hover) < 0.02f) {
+                        hover = target;
+                        ((Timer) e.getSource()).stop();
+                    }
+                    repaint();
+                });
+            }
+            timer.start();
+        }
+
         @Override
         protected void paintComponent(Graphics g) {
+
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
                 RenderingHints.VALUE_ANTIALIAS_ON);
+
+            int w = getWidth() - 1;
+            int h = getHeight() - 1 - SHADOW;
+
+            // เงา
+            for (int i = 1; i <= SHADOW; i++) {
+                int alpha = (int) ((5 + 14 * hover) * (SHADOW - i + 1) / (float) SHADOW);
+                g2.setColor(new Color(50, 50, 120, alpha));
+                g2.fillRoundRect(i, i + 1, w - 2 * i, h, arc, arc);
+            }
+
             g2.setColor(fill);
-            g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, arc, arc);
-            g2.setColor(BORDER);
-            g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, arc, arc);
+            g2.fillRoundRect(0, 0, w, h, arc, arc);
+
+            g2.setColor(lerp(BORDER, accent, hover));
+            g2.drawRoundRect(0, 0, w, h, arc, arc);
+
             g2.dispose();
             super.paintComponent(g);
         }
     }
 
-    /** วงกลมไอคอนสีอ่อนในการ์ดสรุป */
-    private static class IconBadge extends JComponent {
+    //วงกลมไอคอนในการ์ดสรุปกับวงคลื่นขยายออก
+    private class IconBadge extends JComponent {
 
         private final Color color;
         private final String glyph;
@@ -1149,41 +1381,52 @@ public class MainFrame extends JFrame {
         IconBadge(Color color, String glyph) {
             this.color = color;
             this.glyph = glyph;
-            setPreferredSize(new Dimension(54, 54));
+            setPreferredSize(new Dimension(68, 68));
         }
 
         @Override
         protected void paintComponent(Graphics g) {
+
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
                 RenderingHints.VALUE_ANTIALIAS_ON);
             g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
                 RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 
-            int d = Math.min(getWidth(), getHeight());
-            int x = (getWidth() - d) / 2;
-            int y = (getHeight() - d) / 2;
+            int cx = getWidth() / 2;
+            int cy = getHeight() / 2;
+            int d = 46;
 
-            g2.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 36));
-            g2.fillOval(x, y, d, d);
+            // วงคลื่น
+            float k = (phase * 0.5f) % 1f;
+            int rr = (int) (d / 2 + k * 14);
+            g2.setColor(withAlpha(color, (int) (70 * (1 - k))));
+            g2.setStroke(new BasicStroke(2f));
+            g2.drawOval(cx - rr, cy - rr, rr * 2, rr * 2);
+
+            g2.setColor(withAlpha(color, 38));
+            g2.fillOval(cx - d / 2, cy - d / 2, d, d);
 
             g2.setColor(color);
-            g2.setFont(font(Font.BOLD, 24));
+            g2.setFont(font(Font.BOLD, 22));
             FontMetrics fm = g2.getFontMetrics();
-            int tx = x + (d - fm.stringWidth(glyph)) / 2;
-            int ty = y + (d - fm.getHeight()) / 2 + fm.getAscent();
-            g2.drawString(glyph, tx, ty);
+            g2.drawString(glyph,
+                cx - fm.stringWidth(glyph) / 2,
+                cy - fm.getHeight() / 2 + fm.getAscent());
             g2.dispose();
         }
     }
 
-    /** ปุ่มมุมมน มี hover, สถานะ active และ disabled */
+    // ปุ่มมุมมน เปลี่ยนสี hover / active แบบนุ่มนวล
     private static class RoundedButton extends JButton {
 
         private final Color base;
         private final Color hover;
         private boolean over = false;
         private boolean active = false;
+        private float hoverT = 0f;
+        private float actT = 0f;
+        private final Timer anim;
 
         int arc = 12;
         Color activeBg = null;
@@ -1207,19 +1450,38 @@ public class MainFrame extends JFrame {
             setBorder(new EmptyBorder(10, 22, 10, 22));
             setCursor(new Cursor(Cursor.HAND_CURSOR));
 
+            anim = new Timer(16, e -> step());
+
             addMouseListener(new MouseAdapter() {
-                @Override public void mouseEntered(MouseEvent e) { over = true; repaint(); }
-                @Override public void mouseExited(MouseEvent e) { over = false; repaint(); }
+                @Override public void mouseEntered(MouseEvent e) { over = true; anim.start(); }
+                @Override public void mouseExited(MouseEvent e) { over = false; anim.start(); }
             });
+        }
+
+        private void step() {
+            float th = over ? 1f : 0f;
+            float ta = active ? 1f : 0f;
+
+            hoverT += (th - hoverT) * 0.25f;
+            actT += (ta - actT) * 0.20f;
+
+            if (Math.abs(th - hoverT) < 0.02f) hoverT = th;
+            if (Math.abs(ta - actT) < 0.02f) actT = ta;
+
+            if (hoverT == th && actT == ta) {
+                anim.stop();
+            }
+            repaint();
         }
 
         void setActive(boolean a) {
             this.active = a;
-            repaint();
+            anim.start();
         }
 
         @Override
         protected void paintComponent(Graphics g) {
+
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
                 RenderingHints.VALUE_ANTIALIAS_ON);
@@ -1227,20 +1489,23 @@ public class MainFrame extends JFrame {
             Color c;
             if (!isEnabled()) {
                 c = new Color(214, 218, 232);
-            } else if (active && activeBg != null) {
-                c = activeBg;
-            } else if (over) {
-                c = hover;
             } else {
-                c = base;
+                c = lerp(base, hover, hoverT);
+                if (activeBg != null) {
+                    c = lerp(c, activeBg, actT);
+                }
+                if (!indicator && getModel().isPressed()) {
+                    c = c.darker();
+                }
             }
 
             g2.setColor(c);
             g2.fillRoundRect(0, 0, getWidth(), getHeight(), arc, arc);
 
-            if (indicator && active) {
+            if (indicator && actT > 0.01f) {
+                int bh = (int) (getHeight() / 2 * actT);
                 g2.setColor(new Color(165, 180, 252));
-                g2.fillRoundRect(0, getHeight() / 4, 4, getHeight() / 2, 4, 4);
+                g2.fillRoundRect(0, (getHeight() - bh) / 2, 4, bh, 4, 4);
             }
             g2.dispose();
 
@@ -1254,7 +1519,7 @@ public class MainFrame extends JFrame {
         }
     }
 
-    /** ช่องกรอกที่มีข้อความจางๆ บอกใบ้ (placeholder) */
+    // ช่องกรอกที่มีข้อความจางๆ บอกใบ้
     private static class HintField extends JTextField {
 
         private final String hint;
@@ -1280,6 +1545,117 @@ public class MainFrame extends JFrame {
                 g2.drawString(hint, in.left, y);
                 g2.dispose();
             }
+        }
+    }
+
+    private static class ToastPane extends JComponent {
+
+        private static final int IN = 320;
+        private static final int OUT = 320;
+
+        private String text = null;
+        private boolean success = true;
+        private int hold = 2200;
+        private long start = 0;
+        private Timer timer;
+
+        ToastPane() {
+            setOpaque(false);
+        }
+
+        @Override
+        public boolean contains(int x, int y) {
+            return false;   // ให้เมาส์ทะลุไปยังหน้าจอด้านล่าง
+        }
+
+        void show(String text, boolean success, int holdMs) {
+
+            this.text = text;
+            this.success = success;
+            this.hold = holdMs;
+            this.start = System.currentTimeMillis();
+
+            if (timer == null) {
+                timer = new Timer(16, e -> {
+                    long el = System.currentTimeMillis() - start;
+                    if (el > IN + hold + OUT) {
+                        this.text = null;
+                        ((Timer) e.getSource()).stop();
+                    }
+                    repaint();
+                });
+            }
+            timer.start();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+
+            if (text == null) {
+                return;
+            }
+
+            long el = System.currentTimeMillis() - start;
+            float p;
+            if (el < IN) {
+                p = Anim.ease(el / (float) IN);
+            } else if (el < IN + hold) {
+                p = 1f;
+            } else {
+                p = 1f - Anim.ease(Math.min(1f, (el - IN - hold) / (float) OUT));
+            }
+
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
+                RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+
+            Font f = font(Font.BOLD, 14);
+            FontMetrics fm = g2.getFontMetrics(f);
+
+            int maxW = Math.min(620, getWidth() - 60);
+            String t = text;
+            while (t.length() > 4 && fm.stringWidth(t) > maxW - 76) {
+                t = t.substring(0, t.length() - 4) + "...";
+            }
+
+            int w = fm.stringWidth(t) + 76;
+            int h = 54;
+            int x = getWidth() - w - 32 + (int) ((1 - p) * 70);
+            int y = getHeight() - h - 32;
+
+            // เงา
+            for (int i = 0; i < 6; i++) {
+                g2.setColor(new Color(0, 0, 0, (int) (16 * p * (1 - i / 6f))));
+                g2.fillRoundRect(x - i, y - i + 4, w + 2 * i, h + 2 * i, 20 + i, 20 + i);
+            }
+
+            g2.setColor(new Color(30, 27, 75, (int) (246 * p)));
+            g2.fillRoundRect(x, y, w, h, 18, 18);
+
+            // ไอคอนวงกลม
+            Color kind = success ? OK : BAD;
+            int cx = x + 30;
+            int cy = y + h / 2;
+            g2.setColor(withAlpha(kind, (int) (255 * p)));
+            g2.fillOval(cx - 12, cy - 12, 24, 24);
+
+            g2.setColor(new Color(255, 255, 255, (int) (255 * p)));
+            g2.setStroke(new BasicStroke(2.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            if (success) {
+                g2.drawLine(cx - 5, cy, cx - 1, cy + 4);
+                g2.drawLine(cx - 1, cy + 4, cx + 6, cy - 4);
+            } else {
+                g2.drawLine(cx, cy - 6, cx, cy + 1);
+                g2.fillOval(cx - 1, cy + 4, 3, 3);
+            }
+
+            g2.setFont(f);
+            g2.setColor(new Color(255, 255, 255, (int) (255 * p)));
+            g2.drawString(t, x + 56, cy + (fm.getAscent() - fm.getDescent()) / 2);
+
+            g2.dispose();
         }
     }
 }
